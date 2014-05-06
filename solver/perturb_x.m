@@ -1,8 +1,8 @@
 function J  = perturb_x(fun, x0, varargin)
 % Finite difference
 
-if nargin < 5
-    pert = 1e-5;
+if nargin < 3
+    pert = 1e-3;
 else
     pert = varargin{1};
 end
@@ -13,9 +13,9 @@ n = length(x0);
 J = zeros(m,n);
 for i=1: n
     if length(pert) >1
-        delta = pert(i);
+        delta = (abs(x0(i)) + 1e-3) * pert(i);
     else
-        delta = pert;
+        delta = (abs(x0(i)) + 1e-3) * pert;
     end
     x = x0;
     x(i) = x(i) + delta;

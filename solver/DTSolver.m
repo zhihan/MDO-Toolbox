@@ -9,6 +9,8 @@ classdef DTSolver <handle
         objective   %Control objective
         initCondition
         
+        options  % optimization options
+        
         designConstraint % Design constraints
     end
     
@@ -44,6 +46,8 @@ classdef DTSolver <handle
 end
 
 function [out] = f_solve_impl(obj)
+checkSolver(obj);
+
 obj.n_design = length(obj.xd0);
 xinit = obj.initCondition.fun(obj.xd0);
 obj.n_state = length(xinit);
@@ -51,7 +55,7 @@ t = obj.t;
 % Initial control is zero
 nt = length(t);
 if isempty(obj.x0)
-    % Step 1,
+    % Solve the ODe to get the time points
     t = obj.t;
     [~,x_state] = ode23(...
         @(t,x)obj.system.deriv(t,x,zeros(obj.n_control,1),obj.xd0),...
@@ -64,11 +68,8 @@ else
     x0 = obj.x0;
 end
 
-options = optimset('display','iter','algorithm','interior-point',...
-    'MaxIter', 1e+6, 'MaxFunEvals', 1e+6, ...
-    'LargeScale', 'on', ...
-    'TolFun',1e-6, 'UseParallel','always', ...
-    'GradConstr','on', 'GradObj','on', 'DerivativeCheck','off');
+options = obj.options;
+
 if ~isempty(obj.objective.hessian)
     options = optimset(options, 'Hessian', 'on', ...
         'HessFcn', @(x, lambda) obj.f_hessian(x, lambda));
@@ -98,7 +99,7 @@ H =  [F, sparse(obj.n_design,length(x_state));
     obj.objective.hessian(x_d, x_state_frames, obj.t)];
 end
 
-function [obj_f, Gradient, H] = f_obj_impl(obj ,x)
+function [obj_f, Gradient] = f_obj_impl(obj ,x)
 x_state = x(obj.n_design+1:end);
 x_d = x(1:obj.n_design);
 nt = length(x_state)/(obj.n_state + obj.n_control);
@@ -122,61 +123,10 @@ x_state_frames = reshape(x_state, obj.n_state + obj.n_control, nt);
 
 % Calculate h and Jh
 params = x(1:obj.n_design);
-xinit = obj.initCondition.fun(params);
-H0 = xinit - x_state_frames(1:obj.n_state,1);
-
-H_state = zeros(obj.n_state, nt);
-JH_state = sparse(obj.n_state*nt, ...
-    (obj.n_state + obj.n_control)*nt);
-for i=2:nt
-    state_i = x_state_frames(1:obj.n_state,i);
-    control_i = x_state_frames(obj.n_state+1:obj.n_state+obj.n_control,i);
-    
-    xd_i = obj.system.deriv(obj.t(i), state_i, control_i, params);
-    state_i_1 = x_state_frames(1:obj.n_state,i-1);
-    control_i_1 = x_state_frames(obj.n_state+1:obj.n_state+obj.n_control,i-1);
-    
-    xd_i_1 = obj.system.deriv(obj.t(i-1) ,state_i_1, control_i_1, params);
-    dti = obj.t(i) - obj.t(i-1);
-    H_state(:,i) = state_i - state_i_1 ...
-        - dti/2 * (xd_i + xd_i_1);
-    
-    dfdx_i = obj.system.jacobian(obj.t(i), state_i, control_i, params);
-    dfdx_i_1 = obj.system.jacobian(obj.t(i-1), state_i_1, control_i_1,params);
-    JH_state((i-1)*obj.n_state+1:i*obj.n_state, ...
-        (i-1)*(obj.n_state+obj.n_control)+1:i*(obj.n_state +obj.n_control)) ...
-        = [speye(obj.n_state), zeros(obj.n_state, obj.n_control)] - dti/2*dfdx_i;
-    JH_state((i-1)*obj.n_state+1:i*obj.n_state, ...
-        (i-2)*(obj.n_state + obj.n_control) +1:(i-1)*(obj.n_state + obj.n_control)) ...
-        = [-speye(obj.n_state), zeros(obj.n_state, obj.n_control)] - dti/2*dfdx_i_1;
-end
-
-JH_param = sparse(obj.n_state*nt, obj.n_design);
-for i=2:nt
-    state_i = x_state_frames(1:obj.n_state,i);
-    control_i = x_state_frames(obj.n_state+1:obj.n_state+obj.n_control,i);
-    state_i_1 = x_state_frames(1:obj.n_state,i-1);
-    control_i_1 = x_state_frames(obj.n_state+1:obj.n_state+obj.n_control,i-1);
-    dti = obj.t(i) - obj.t(i-1);
-    if ~isempty(obj.system.jacobian_d)
-        % Has non-empty design variable Jacobian, i.e.,
-        % Derivative explicitly depends on the design variable
-        dfdpi = obj.system.jacobian_d(obj.t(i), state_i, control_i, params);
-        dfdpi_1 = obj.system.jacobian_d(obj.t(i-1), state_i_1, control_i_1,params);
-        JH_param((i-1)*obj.n_state +1: i*obj.n_state, :) = -dti/2* (dfdpi + dfdpi_1);
-    else
-        % Derivative does not depend on design variables
-        % These entries are left to be zeros.
-    end
-end
-
-JH = [JH_param, JH_state; ...
-    obj.initCondition.jacobian(params), ...
-    -speye(obj.n_state), zeros(obj.n_state,obj.n_control), ...
-    zeros(obj.n_state, ...
-    (nt-1)*(obj.n_state+obj.n_control))]';
-H = [reshape(H_state, numel(H_state), 1); H0];
-
+dimensions = struct('n_state', obj.n_state, 'n_control', obj.n_control, ...
+    'n_input', 0);
+[H, JH] = defectEquation(obj.system, obj.initCondition, [], ...
+    obj.t, x_state_frames, params, dimensions);
 
 % Add design constraints
 if ~isempty(obj.designConstraint)

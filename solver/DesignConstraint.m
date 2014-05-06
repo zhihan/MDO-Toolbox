@@ -1,9 +1,16 @@
 classdef DesignConstraint
+    % Design constraints
+    % Design constraints are constraints on the design variables.
     
     properties
-        ineqfun
-        ineqJacobian
+        % nonlinear functions
+        fun
+        
+        % The Jacobian of the function fun
+        jacobian
+        
+        % The Hessian of the Lagrangian function
+        hessian  
+        
     end
-    
 end
-
